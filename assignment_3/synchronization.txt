@@ -1,0 +1,23 @@
+Q) Show the difference between: 
+■ Calling cudaDeviceSynchronize() after kernel2 before copying results back.
+■ Not calling cudaDeviceSynchronize() (CPU may print results before GPU finishes). 
+
+A) When you call cudaDeviceSynchronize() after launching the second kernel and before the final cudaMemcpy, 
+the CPU thread pauses. It waits for all GPU tasks on all streams (stream1 and stream2) to finish execution. 
+Once the function returns, the system guarantees that the final result, D[i], is stable in the device memory 
+(d_Result2). The subsequent cudaMemcpy then safely transfers the correct, calculated value to the host array. 
+The program is deterministic and correct. 
+If you omit the function, the CPU immediately proceeds to the cudaMemcpy after launching the second kernel. The 
+GPU is running asynchronously on its separate stream while the CPU issues the memory copy command. 
+A race condition occurs here: the cudaMemcpy operation, which reads data from the GPU, might execute before 
+the square kernel has finished writing the final value to d_Result2. Since d_Result2 was initially cleared to 
+zero, the CPU may read and print 0 instead of the calculated result. The output is non-deterministic and unreliable. 
+
+Q) Thread Hierarchy 
+○ First, launch kernel1<<<1, N>>> (1 block, N threads). 
+○ Then, launch kernel1<<<N/32, 32>>> (N/32 blocks, 32 threads per block). 
+○ Compare: How does the thread indexing differ (threadIdx, blockIdx)? 
+
+A) <<<1, N>>> does simple linear indexing, but relies heavily on the scheduler to manage one huge block. 
+<<<N/32, 32>>> indexing requires multiplication; the work is broken into many smaller, manageable blocks (warps/Warp-sized) 
+which is typically more efficient for GPU scheduling.

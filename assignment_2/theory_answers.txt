@@ -1,0 +1,81 @@
+Q) Why does choosing a block size that is not a multiple of 32 (warp size) lead to 
+underutilization of GPU hardware resources?
+
+A) NVIDIA GPUs execute threads in groups of 32, known as warps. When a thread block is
+launched on an SM, its threads are divided into warps of 32. If the total number of threads
+in the block is not a multiple of 32 (e.g., 40 threads), the second warp will contain only the
+remaining threads, so it will have 8 active threads. Thus, wasting the remaining 24.
+
+Q) Explain how occupancy of an SM (Streaming Multiprocessor) depends on block
+size and threads per block.
+
+A) Occupancy is defined as the ratio of active warps to the maximum number of warps the SM
+can support. Occupancy depends on block size because the thread block must fit within the
+SM's finite resource limits i.e. the maximum number of threads, blocks, total registers, and
+total shared memory per SM. A small block size (e.g., 32 threads) can hit the maximum block
+limit before fully utilizing the maximum thread limit, resulting in low occupancy. Conversely,
+a large block size (e.g., 1024 threads) consumes too many resources like registers and
+shared memory. If a single block demands too many resources, the SM will be unable to
+launch the maximum number of concurrent blocks, which also reduces occupancy. The
+optimal block size, usually a multiple of 32 and between 128 and 256 threads, is a balance
+that maximizes active warps without hitting the register or shared memory capacity limits
+too quickly.
+
+Q) Suppose you run an image filter with the following configurations: 
+Case A: 64 threads per block
+Case B: 256 threads per block
+Case C: 1024 threads per block
+If Case B is fastest, explain why neither the smallest nor the largest block size gave optimal performance.
+Note: Write any generic Code which automatically utilizes maximum or more suitable block sizes and thread sizes 
+according to the requirement
+
+A) If Case B (256 threads per block) is the fastest, it means this size achieved the best trade-off between maximizing 
+GPU utilization and managing finite hardware resources. Case A (64 threads) was likely slower because it couldn't provide 
+enough active warps to the SMs. A smaller block size runs a higher risk of hitting the SM's block limit before the thread 
+limit is reached, resulting in low occupancy and leaving compute resources idle. Case C (1024 threads) was likely slower 
+because, despite maximizing warps per block, it consumed too much of a critical chip resource, such as registers. This 
+excessive consumption limited the total number of blocks (and thus total active warps) that could simultaneously reside 
+on an SM, effectively reducing occupancy below the optimal level achieved by Case B. Case B provided enough warps for 
+latency hiding without excessively stressing the limited SM resources, leading to the highest sustained throughput.
+
+import cupy as cp
+import numpy as np
+
+
+def gpu_optimal_filter(input_array):
+    output_array = cp.empty_like(input_array)
+    
+    kernel_code = r'''
+    extern "C" __global__
+    void generic_kernel(const float* input, float* output, int N) {
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < N) {
+            output[idx] = input[idx] * 0.5f;
+        }
+    }
+    '''
+    
+    kernel = cp.RawKernel(kernel_code, 'generic_kernel')
+    
+    (blocks_per_grid, threads_per_block, shared_mem) = cp.cuda.runtime.get_occupancy_max_potential_block_size(
+        kernel.ptr, 0, 0
+    )
+    
+    N = input_array.size
+    grid_size = (N + threads_per_block - 1) // threads_per_block
+    
+    kernel((grid_size,), (threads_per_block,), (input_array, output_array, N))
+    
+    return output_array
+
+Q) Why does increasing the number of threads per block not always improve performance? 
+Consider register pressure, shared memory limits, and scheduling.
+A) Increasing the number of threads per block doesn't always improve performance because it limits the number 
+of blocks that can run simultaneously on a Streaming Multiprocessor (SM), thus reducing occupancy. A larger 
+block size demands more registers per block and shared memory, quickly hitting the SM's finite capacity. When 
+a block uses too many of these resources, the SM must reduce the total number of active blocks it can host. 
+This reduction in the number of concurrent blocks lowers occupancy, which is the ratio of active warps to 
+the maximum possible. Low occupancy prevents the GPU from having enough active warps available for the 
+scheduler to swap to, making it unable to efficiently hide memory access latency. The performance peak is 
+reached at the block size that provides enough warps for latency hiding without causing resource constraints 
+that force a significant drop in total block residency.
